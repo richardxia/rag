@@ -16,6 +16,17 @@ def uri_matching(text)
 end
 
 describe CourseraClient do
+  around :each do |example|
+    # This is a weird workaround because RSpec is catching an exception it
+    # shouldn't be catching
+    # timeout without a second argument internally raises an error, catches
+    # it, and returns a Timeout:Error
+    # RSpec is somehow catching that interal error
+    Timeout::timeout(1, Timeout::Error) do
+      example.run
+    end
+  end
+
   before :each do
     CourseraController.stub(:new).and_return(controller)
   end
@@ -55,7 +66,8 @@ EOF
   describe "#run" do
     before :each do
       autograder = {'test-assignment' => { :uri => 'http://example.com', :type => 'RspecGrader' } }
-      CourseraClient.any_instance.stub(:load_configurations).and_return(double.as_null_object)
+      mock_conf = double(:[] => nil).as_null_object
+      CourseraClient.any_instance.stub(:load_configurations).and_return(mock_conf)
       CourseraClient.any_instance.stub(:init_autograders).and_return(autograder)
     end
 

@@ -15,6 +15,7 @@ class CourseraClient
 
   class CourseraClient::UnknownAssignmentPart < StandardError ; end
   class CourseraClient::SpecNotFound < StandardError ; end
+  class CourseraClient::NoConsumerThreadError < StandardError ; end
 
   # Requires a file called 'autograders.yml' to exist in the current working 
   # directory and it must represent a hash from assignment_part_sid's to
@@ -27,8 +28,9 @@ class CourseraClient
     @endpoint = conf['endpoint_uri']
     @api_key = conf['api_key']
     @controller = CourseraController.new(@endpoint, @api_key)
-    @halt = conf['halt']
+    @halt = conf['halt'] != false
     @sleep_duration = conf['sleep_duration'].nil? ? 5*60 : conf['sleep_duration'] # in seconds
+    @num_threads = conf['num_threads'] || 1
 
     # Load configuration file for assignment_id->spec map
     # We assume that the keys are also the assignment_part_sids, as well as the queue_ids
@@ -36,31 +38,59 @@ class CourseraClient
   end
 
   def run
-    each_submission do |assignment_part_sid, result|
-      submission = decode_submission(result)
-      spec = load_spec(assignment_part_sid)
-      grader_type = @autograders[assignment_part_sid][:type]
-
-      # FIXME: Use non-subprocess version instead
-      begin
-        score, comments = run_autograder_subprocess(submission, spec, grader_type) # defined in AutoGraderSubprocess
-      rescue AutoGraderSubprocess::SubprocessError => e
-        score = 0
-        comments = e.to_s
-      rescue AutoGraderSubprocess::OutputParseError => e
-        score = 0
-        comments = e.to_s
-      rescue
-        logger.fatal(submission)
-        raise
+    stop = false
+    queue = Queue.new
+    producer = Thread.new do
+      each_submission do |assignment_part_sid, result|
+        queue.push([assignment_part_sid, result])
+        while queue.size > @num_threads
+          thread.pass
+        end
       end
-      formatted_comments = format_for_html(comments)
-      @controller.post_score(result['api_state'], score, formatted_comments)
-      logger.debug "  scored #{score}: #{comments}"
     end
-  rescue Exception => e
-    logger.fatal(e)
-    raise
+    consumers = []
+    1.upto(@num_threads) do |i|
+      consumers << Thread.new do
+        # FIXME: Choose a better variable name
+        until stop
+          item = queue.pop
+          Thread.exit if item == :exit
+          assignment_part_sid, result = item
+          run_and_score(assignment_part_sid, result)
+        end
+      end
+    end
+
+    watcher = Thread.new do
+      Thread.current.abort_on_exception = true
+      until stop
+        if consumers.select{|c| c.alive?}.size == 0
+          raise NoConsumerThreadError, "Everything died" unless stop
+        end
+        consumers.each do |c|
+          # If c died due to exception, log the exception
+          if c.status == nil
+            begin
+              c.join
+            rescue StandardError => e
+              logger.fatal e.to_s
+            end
+            # TODO: Retry?, start new thread
+          end
+        end
+      end
+    end
+
+    producer.join
+    stop = true
+    while queue.size > 0
+      Thread.pass
+    end
+    consumers.size.times do
+      queue.push(:exit)
+    end
+    consumers.each{|c| c.join}
+    watcher.join
   end
 
   def download_submissions(file)
@@ -210,5 +240,31 @@ class CourseraClient
     conf = confs[conf_name]
     raise "Couldn't load configuration #{conf_name}" if conf.nil?
     conf
+  end
+
+  def run_and_score(assignment_part_sid, result)
+    submission = decode_submission(result)
+    spec = load_spec(assignment_part_sid)
+    grader_type = @autograders[assignment_part_sid][:type]
+
+    # FIXME: Use non-subprocess version instead
+    begin
+      score, comments = run_autograder_subprocess(submission, spec, grader_type) # defined in AutoGraderSubprocess
+    rescue AutoGraderSubprocess::SubprocessError => e
+      score = 0
+      comments = e.to_s
+    rescue AutoGraderSubprocess::OutputParseError => e
+      score = 0
+      comments = e.to_s
+    rescue
+      logger.fatal(submission)
+      raise
+    end
+    formatted_comments = format_for_html(comments)
+    @controller.post_score(result['api_state'], score, formatted_comments)
+    logger.debug "  scored #{score}: #{comments}"
+  rescue Exception => e
+    logger.fatal(e)
+    raise
   end
 end
