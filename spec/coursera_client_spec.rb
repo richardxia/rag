@@ -66,7 +66,7 @@ EOF
   describe "#run" do
     before :each do
       autograder = {'test-assignment' => { :uri => 'http://example.com', :type => 'RspecGrader' } }
-      mock_conf = double(:[] => nil).as_null_object
+      mock_conf = {'num_threads' => 1}
       CourseraClient.any_instance.stub(:load_configurations).and_return(mock_conf)
       CourseraClient.any_instance.stub(:init_autograders).and_return(autograder)
     end

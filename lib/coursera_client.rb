@@ -30,7 +30,7 @@ class CourseraClient
     @controller = CourseraController.new(@endpoint, @api_key)
     @halt = conf['halt'] != false
     @sleep_duration = conf['sleep_duration'].nil? ? 5*60 : conf['sleep_duration'] # in seconds
-    @num_threads = conf['num_threads'] || 1
+    @num_threads = conf['num_threads']
 
     # Load configuration file for assignment_id->spec map
     # We assume that the keys are also the assignment_part_sids, as well as the queue_ids
@@ -121,7 +121,7 @@ class CourseraClient
     file.flush
   end
 
-  private
+private
 
   def load_spec(assignment_part_sid)
     unless @autograders.include?(assignment_part_sid)
@@ -230,6 +230,8 @@ class CourseraClient
   end
 
   def load_configurations(conf_name=nil)
+    defaults = { 'halt' => true, 'sleep_duration' => 300, 'num_threads' => 1 }
+    required = [ 'endpoint_uri', 'api_key', 'autograders_yml' ]
     config_path = 'config/conf.yml'
     unless File.file?(config_path)
       puts "Please copy conf.yml.example into conf.yml and configure the parameters"
@@ -239,7 +241,10 @@ class CourseraClient
     conf_name ||= confs['default'] || confs.keys.first
     conf = confs[conf_name]
     raise "Couldn't load configuration #{conf_name}" if conf.nil?
-    conf
+    required.each do |key|
+      raise "ConfigurationFileError: Required attribute #{key} not found" unless conf.keys.include? key
+    end
+    defaults.update(conf)
   end
 
   def run_and_score(assignment_part_sid, result)
