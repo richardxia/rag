@@ -8,6 +8,7 @@ require_relative 'coursera_controller'
 require_relative 'coursera_submission'
 require_relative 'auto_grader'
 require_relative 'auto_grader_subprocess'
+require_relative 'coursera/config'
 
 class CourseraClient
   include RagLogger
@@ -23,18 +24,12 @@ class CourseraClient
 
   #def initialize(endpoint, api_key, autograders_yml)
   def initialize(conf_name=nil)
-    conf = load_configurations(conf_name)
-
-    @endpoint = conf['endpoint_uri']
-    @api_key = conf['api_key']
-    @controller = CourseraController.new(@endpoint, @api_key)
-    @halt = conf['halt'] != false
-    @sleep_duration = conf['sleep_duration'].nil? ? 5*60 : conf['sleep_duration'] # in seconds
-    @num_threads = conf['num_threads']
+    @config = Coursera::Config.load_from_file(conf_name)
+    @controller = CourseraController.new(@config.endpoint_uri, @config.api_key)
 
     # Load configuration file for assignment_id->spec map
     # We assume that the keys are also the assignment_part_sids, as well as the queue_ids
-    @autograders = init_autograders(conf['autograders_yml'])
+    @autograders = init_autograders(@config.autograders_yml)
   end
 
   def run
@@ -43,13 +38,13 @@ class CourseraClient
     producer = Thread.new do
       each_submission do |assignment_part_sid, result|
         queue.push([assignment_part_sid, result])
-        while queue.size > @num_threads
+        while queue.size > @config.num_threads
           thread.pass
         end
       end
     end
     consumers = []
-    1.upto(@num_threads) do |i|
+    1.upto(@config.num_threads) do |i|
       consumers << Thread.new do
         # FIXME: Choose a better variable name
         until stop
@@ -181,7 +176,7 @@ private
   end
 
   def each_submission
-    if @halt
+    if @config.halt
     # Iterate round robin through assignment parts until all queues are empty
     # parameterize this differently
       while @autograders.size > 0
@@ -222,29 +217,11 @@ private
           yield assignment_part_sid, result
         end
         if all_empty
-          logger.info "sleeping for #{@sleep_duration} seconds"
-          sleep @sleep_duration
+          logger.info "sleeping for #{@config.sleep_duration} seconds"
+          sleep @config.sleep_duration
         end
       end
     end
-  end
-
-  def load_configurations(conf_name=nil)
-    defaults = { 'halt' => true, 'sleep_duration' => 300, 'num_threads' => 1 }
-    required = [ 'endpoint_uri', 'api_key', 'autograders_yml' ]
-    config_path = 'config/conf.yml'
-    unless File.file?(config_path)
-      puts "Please copy conf.yml.example into conf.yml and configure the parameters"
-      exit
-    end
-    confs = YAML::load(File.open(config_path, 'r'){|f| f.read})
-    conf_name ||= confs['default'] || confs.keys.first
-    conf = confs[conf_name]
-    raise "Couldn't load configuration #{conf_name}" if conf.nil?
-    required.each do |key|
-      raise "ConfigurationFileError: Required attribute #{key} not found" unless conf.keys.include? key
-    end
-    defaults.update(conf)
   end
 
   def run_and_score(assignment_part_sid, result)
