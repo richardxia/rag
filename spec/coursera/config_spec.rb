@@ -1,3 +1,4 @@
+require 'spec_helper'
 require 'coursera/config'
 
 describe Coursera::Config do

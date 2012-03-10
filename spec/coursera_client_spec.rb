@@ -1,3 +1,4 @@
+require 'spec_helper'
 require 'coursera_client'
 
 class URIMatcher
@@ -21,13 +22,14 @@ describe CourseraClient do
     # shouldn't be catching
     # timeout without a second argument internally raises an error, catches
     # it, and returns a Timeout:Error
-    # RSpec is somehow catching that interal error
+    # RSpec is somehow catching that internal error
     Timeout::timeout(1, Timeout::Error) do
       example.run
     end
   end
 
   before :each do
+    CourseraClient.any_instance.should_not_receive(:decode_submission)
     CourseraController.stub(:new).and_return(controller)
   end
   let(:controller) { double('fake controller').as_null_object }
@@ -52,9 +54,9 @@ EOF
   end
 
   describe "#run" do
+    let(:mock_conf) { {'num_threads' => 1} }
     before :each do
       autograder = {'test-assignment' => { :uri => 'http://example.com', :type => 'RspecGrader' } }
-      mock_conf = {'num_threads' => 1}
       CourseraClient.any_instance.stub(:load_configurations).and_return(mock_conf)
       CourseraClient.any_instance.stub(:init_autograders).and_return(autograder)
     end
@@ -62,8 +64,15 @@ EOF
     context "with one autograder" do
 
       it 'should exit if the submission queue is empty' do
-        controller.stub(:get_queue_length).and_return(0)
+        RagLogger.logger.info("begin_spec")
+        controller.should_not_receive(:get_pending_submission)
+        controller.should_receive(:get_queue_length).and_return(0)
+        client.should_not_receive(:decode_submission)
         client.run
+      end
+
+      it 'should do nothing' do
+        RagLogger.logger.info("begin_next_spec")
       end
 
       context 'when the submission queue is not empty' do
@@ -103,7 +112,11 @@ EOF
 
     context "with multiple autograders"
 
-    it "should not halt if @halt is false"
+    it "should not halt if @halt is false" do
+      mock_conf[:halt] = false
+      client.stub(:run_and_score)
+      lambda{client.run}.should raise_error(Timeout::Error)
+    end
   end
 
   describe "#load_spec" do

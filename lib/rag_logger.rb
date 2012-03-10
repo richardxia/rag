@@ -5,10 +5,10 @@ module RagLogger
     RagLogger.logger
   end
 
-  def self.logger
+  def self.logger(filename='log/rag.log')
     unless @logger_file
       Dir.mkdir('log/') unless File.directory?('log/')
-      @logger_file ||= 'log/rag.log'
+      @logger_file ||= filename
     end
     @logger ||= Logger.new(@logger_file, 0, 1024*1024)
   end

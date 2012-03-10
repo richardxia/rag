@@ -33,51 +33,48 @@ class CourseraClient
   end
 
   def run
-    stop = false
+    @stop = false
     queue = Queue.new
     producer = Thread.new do
       each_submission do |assignment_part_sid, result|
         queue.push([assignment_part_sid, result])
         while queue.size > @config.num_threads
-          thread.pass
-        end
-      end
-    end
-    consumers = []
-    1.upto(@config.num_threads) do |i|
-      consumers << Thread.new do
-        # FIXME: Choose a better variable name
-        until stop
-          item = queue.pop
-          Thread.exit if item == :exit
-          assignment_part_sid, result = item
-          run_and_score(assignment_part_sid, result)
+          Thread.pass
         end
       end
     end
 
+    consumers = []
+    1.upto(@config.num_threads) do |i|
+      consumers << Thread.new{ consumer_logic(queue) }
+    end
+
+    # This guy makes sure that threads don't die
     watcher = Thread.new do
       Thread.current.abort_on_exception = true
-      until stop
+      until @stop
         if consumers.select{|c| c.alive?}.size == 0
-          raise NoConsumerThreadError, "Everything died" unless stop
+          consumers.each do |c| 
+            if c.status.nil? 
+              log_thread_error(c)
+            end
+          end
+          raise NoConsumerThreadError, "Everything died" unless @stop
         end
         consumers.each do |c|
           # If c died due to exception, log the exception
-          if c.status == nil
-            begin
-              c.join
-            rescue StandardError => e
-              logger.fatal e.to_s
-            end
+          if c.status.nil?
+            log_thread_error(c)
             # TODO: Retry?, start new thread
+            logger.info "Restarting thread"
+            consumers[consumers.index(c)] = Thread.new{consumer_logic(queue)}
           end
         end
       end
     end
 
     producer.join
-    stop = true
+    @stop = true
     while queue.size > 0
       Thread.pass
     end
@@ -117,6 +114,16 @@ class CourseraClient
   end
 
 private
+
+  def consumer_logic(queue)
+    # FIXME: Choose a better variable name
+    until @stop
+      item = queue.pop
+      Thread.exit if item == :exit
+      assignment_part_sid, result = item
+      run_and_score(assignment_part_sid, result)
+    end
+  end
 
   def load_spec(assignment_part_sid)
     unless @autograders.include?(assignment_part_sid)
@@ -221,6 +228,14 @@ private
           sleep @config.sleep_duration
         end
       end
+    end
+  end
+
+  def log_thread_error(c)
+    begin 
+      c.join 
+    rescue StandardError => e
+      logger.fatal e.to_s
     end
   end
 
