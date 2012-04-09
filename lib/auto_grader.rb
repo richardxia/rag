@@ -36,12 +36,13 @@ class AutoGrader
       AutoGrader.new(assignment_id)
     else
       begin
-        obj = Object.const_get(grader).send(:new, submitted_answer, grading_rules)
-        obj.assignment_id = assignment_id
-        return obj
+        grader = Object.const_get(grader)
       rescue NameError => e
         raise AutoGrader::NoSuchGraderError, "Can't find grading strategy for #{grader}"
       end
+      obj = grader.send(:new, submitted_answer, grading_rules)
+      obj.assignment_id = assignment_id
+      return obj
     end
   end
 

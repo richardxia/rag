@@ -37,16 +37,44 @@ module AutoGraderSubprocess
           :timeout => 300,
           :cmd => %Q{./grade4 "#{file.path}" "#{spec}"}
         }
+      when 'ManualGrader'
+        {
+          :timeout => 300,
+          :cmd => %Q{./grade5 "#{file.path}"}
+        }
       else
         {}
       end
 
       begin
         Timeout::timeout(opts[:timeout]) do
-          stdin, stdout, stderr, wait_thr = Open3.popen3 opts[:cmd]
-          stdout_text = stdout.read; stderr_text = stderr.read
-          stdin.close; stdout.close; stderr.close
-          exitstatus = wait_thr.value.exitstatus
+          Open3.popen3 opts[:cmd] do |stdin, stdout, stderr, wait_thr|
+            if grader_type == 'ManualGrader'
+              # FIXME: This is really hacky
+              last_iteration = true
+              while (thread_alive = wait_thr.alive?) or last_iteration
+                begin
+                  stdout_text = stdout.read_nonblock 1024
+                rescue Errno::EAGAIN => e
+                else
+                  print stdout_text
+                end
+
+                begin
+                  stdin_text = STDIN.read_nonblock 1024
+                rescue Errno::EAGAIN => e
+                else
+                  stdin.write(stdin_text)
+                end
+                sleep(0.05)
+                last_iteration = false unless thread_alive
+              end
+            else
+              stdout_text = stdout.read; stderr_text = stderr.read
+              stdin.close; stdout.close; stderr.close
+              exitstatus = wait_thr.value.exitstatus
+            end
+          end
         end
       rescue Timeout::Error => e
         exitstatus = -1
